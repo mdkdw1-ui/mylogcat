@@ -13,12 +13,18 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.*
@@ -32,7 +38,6 @@ import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     private var webViewInstance: WebView? = null
-    private var pendingConfFile: File? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -67,7 +72,7 @@ class MainActivity : ComponentActivity() {
             }
             val file = File(filesDir, "wg.conf")
             file.writeText(text)
-            Toast.makeText(this, "설정 파일이 저장되었습니다. 이제 VPN 스위치를 켜세요.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "설정 파일이 저장되었습니다. VPN 스위치를 켜세요.", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Toast.makeText(this, "파일 읽기 실패: ${e.message}", Toast.LENGTH_SHORT).show()
         }
@@ -80,8 +85,6 @@ class MainActivity : ComponentActivity() {
                 Toast.makeText(this, "먼저 client.conf 파일을 선택해주세요.", Toast.LENGTH_SHORT).show()
                 return
             }
-            pendingConfFile = file
-            // VPN 권한 요청 (이미 허용했다면 바로 시작됨)
             val intent = VpnService.prepare(this)
             if (intent != null) {
                 startActivityForResult(intent, 100)
@@ -97,7 +100,7 @@ class MainActivity : ComponentActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == 100 && resultCode == RESULT_OK) {
-            pendingConfFile?.let { startVpnService(it) }
+            startVpnService(File(filesDir, "wg.conf"))
         }
     }
 
@@ -135,9 +138,8 @@ fun MainScreen(
     var isRunning by remember { mutableStateOf(false) }
     var isVpnOn by remember { mutableStateOf(false) }
     var serverStatus by remember { mutableStateOf("서버 확인 중...") }
+    var debugLog by remember { mutableStateOf("로그 대기 중...\n") }
     val context = LocalContext.current
-    
-    // 앱 시작 시 저장된 conf 파일이 있는지 확인
     var hasConf by remember { mutableStateOf(getSavedConf().isNotEmpty()) }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -145,11 +147,11 @@ fun MainScreen(
     ) { uri: Uri? ->
         uri?.let { 
             onConfSelected(it) 
-            hasConf = true // 파일 선택 후 상태 업데이트
+            hasConf = true 
         }
     }
 
-    // 서버 연결 상태 주기적 체크
+    // 서버 연결 상태 주기적 체크 및 디버그 로그 업데이트
     LaunchedEffect(Unit) {
         while (true) {
             withContext(Dispatchers.IO) {
@@ -162,9 +164,10 @@ fun MainScreen(
                 } catch (e: Exception) {
                     serverStatus = "서버 연결 실패 (VPN을 켜주세요)"
                     isVpnOn = false
+                    debugLog += "❌ 서버 연결 실패: ${e.message}\n"
                 }
             }
-            delay(3000) // 3초마다 갱신
+            delay(3000)
         }
     }
 
@@ -177,33 +180,25 @@ fun MainScreen(
         }
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
+            // 서버 상태 표시
             Text(
                 text = serverStatus,
                 modifier = Modifier.padding(8.dp),
                 color = if (serverStatus.contains("연결됨")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
             )
 
-            // VPN 제어 영역
+            // VPN 제어 카드
             Card(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                         Text("VPN 연결", modifier = Modifier.weight(1f))
-                        Switch(
-                            checked = isVpnOn,
-                            onCheckedChange = { 
-                                isVpnOn = it
-                                onVpnToggle(it) 
-                            }
-                        )
+                        Switch(checked = isVpnOn, onCheckedChange = { isVpnOn = it; onVpnToggle(it) })
                     }
                     if (!hasConf) {
-                        Text("설정 파일이 없습니다. 아래 버튼을 눌러 로드하세요.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                        Text("설정 파일이 없습니다.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                     }
                     Spacer(modifier = Modifier.height(8.dp))
-                    Button(
-                        onClick = { filePickerLauncher.launch("*/*") },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
+                    Button(onClick = { filePickerLauncher.launch("*/*") }, modifier = Modifier.fillMaxWidth()) {
                         Text(if (hasConf) "client.conf 다시 선택" else "client.conf 파일 선택")
                     }
                 }
@@ -219,8 +214,32 @@ fun MainScreen(
                 Button(onClick = onSave, modifier = Modifier.weight(1f)) { Text("저장") }
             }
 
+            // 앱 내부 디버그 로그창 (화면의 30% 차지)
+            Text("디버그 로그:", modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(0.3f)
+                    .padding(horizontal = 8.dp)
+                    .background(Color.Black)
+            ) {
+                Text(
+                    text = debugLog,
+                    color = Color.Green,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(4.dp)
+                        .verticalScroll(rememberScrollState())
+                )
+            }
+
+            // 웹뷰 (나머지 화면 차지)
             AndroidView(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(0.7f),
                 factory = { ctx ->
                     WebView(ctx).apply {
                         settings.javaScriptEnabled = true
