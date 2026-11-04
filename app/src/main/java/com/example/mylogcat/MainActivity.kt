@@ -40,19 +40,24 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     MainScreen(
-                        onStart = { ContextCompat.startForegroundService(this, Intent(this, LogService::class.java)) },
-                        onStop = { stopService(Intent(this, LogService::class.java)) },
+                        onStartLog = { ContextCompat.startForegroundService(this, Intent(this, LogService::class.java)) },
+                        onStopLog = { stopService(Intent(this, LogService::class.java)) },
                         onSave = { saveLogsFromWebView() },
                         onWebViewCreated = { webViewInstance = it },
                         onConfSelected = { uri -> handleConfFile(uri) },
-                        onRequestVpnPermission = { startVpnPermissionActivity() }
+                        onVpnToggle = { isChecked -> toggleVpn(isChecked) },
+                        getSavedConf = { readSavedConf() }
                     )
                 }
             }
         }
     }
 
-    // 1. 사용자가 client.conf 선택 시 내부 저장소에 저장 후 VPN 권한 요청
+    private fun readSavedConf(): String {
+        val file = File(filesDir, "wg.conf")
+        return if (file.exists()) file.readText() else ""
+    }
+
     private fun handleConfFile(uri: Uri) {
         try {
             val text = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
@@ -62,23 +67,31 @@ class MainActivity : ComponentActivity() {
             }
             val file = File(filesDir, "wg.conf")
             file.writeText(text)
+            Toast.makeText(this, "설정 파일이 저장되었습니다. 이제 VPN 스위치를 켜세요.", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "파일 읽기 실패: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun toggleVpn(turnOn: Boolean) {
+        if (turnOn) {
+            val file = File(filesDir, "wg.conf")
+            if (!file.exists()) {
+                Toast.makeText(this, "먼저 client.conf 파일을 선택해주세요.", Toast.LENGTH_SHORT).show()
+                return
+            }
             pendingConfFile = file
-            
-            // VPN 권한 요청 (안드로이드 시스템 팝업)
+            // VPN 권한 요청 (이미 허용했다면 바로 시작됨)
             val intent = VpnService.prepare(this)
             if (intent != null) {
                 startActivityForResult(intent, 100)
             } else {
                 startVpnService(file)
             }
-        } catch (e: Exception) {
-            Toast.makeText(this, "파일 읽기 실패: ${e.message}", Toast.LENGTH_SHORT).show()
+        } else {
+            stopService(Intent(this, WireGuardService::class.java).setAction("stop"))
+            Toast.makeText(this, "VPN 연결을 해제했습니다.", Toast.LENGTH_SHORT).show()
         }
-    }
-
-    private fun startVpnPermissionActivity() {
-        val intent = VpnService.prepare(this)
-        if (intent != null) startActivityForResult(intent, 100)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -88,7 +101,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // 2. VPN 서비스 시작
     private fun startVpnService(confFile: File) {
         val intent = Intent(this, WireGuardService::class.java).apply {
             action = "start"
@@ -112,34 +124,47 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
-    onStart: () -> Unit,
-    onStop: () -> Unit,
+    onStartLog: () -> Unit,
+    onStopLog: () -> Unit,
     onSave: () -> Unit,
     onWebViewCreated: (WebView) -> Unit,
     onConfSelected: (Uri) -> Unit,
-    onRequestVpnPermission: () -> Unit
+    onVpnToggle: (Boolean) -> Unit,
+    getSavedConf: () -> String
 ) {
     var isRunning by remember { mutableStateOf(false) }
+    var isVpnOn by remember { mutableStateOf(false) }
     var serverStatus by remember { mutableStateOf("서버 확인 중...") }
     val context = LocalContext.current
+    
+    // 앱 시작 시 저장된 conf 파일이 있는지 확인
+    var hasConf by remember { mutableStateOf(getSavedConf().isNotEmpty()) }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
-        uri?.let { onConfSelected(it) }
+        uri?.let { 
+            onConfSelected(it) 
+            hasConf = true // 파일 선택 후 상태 업데이트
+        }
     }
 
-    // 서버 상태 체크
+    // 서버 연결 상태 주기적 체크
     LaunchedEffect(Unit) {
-        withContext(Dispatchers.IO) {
-            try {
-                val socket = Socket()
-                socket.connect(InetSocketAddress("10.0.0.97", 8081), 2000)
-                socket.close()
-                serverStatus = "서버 연결됨 (VPN 활성화 상태)"
-            } catch (e: Exception) {
-                serverStatus = "서버 연결 실패 (VPN을 켜주세요)"
+        while (true) {
+            withContext(Dispatchers.IO) {
+                try {
+                    val socket = Socket()
+                    socket.connect(InetSocketAddress("10.0.0.97", 8081), 2000)
+                    socket.close()
+                    serverStatus = "서버 연결됨 (VPN 활성화 상태)"
+                    isVpnOn = true
+                } catch (e: Exception) {
+                    serverStatus = "서버 연결 실패 (VPN을 켜주세요)"
+                    isVpnOn = false
+                }
             }
+            delay(3000) // 3초마다 갱신
         }
     }
 
@@ -158,15 +183,29 @@ fun MainScreen(
                 color = if (serverStatus.contains("연결됨")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
             )
 
-            // VPN 제어 버튼
-            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { filePickerLauncher.launch("*/*") }, modifier = Modifier.weight(1f)) {
-                    Text("client.conf 로드 및 VPN 연결")
-                }
-                OutlinedButton(onClick = {
-                    context.startService(Intent(context, WireGuardService::class.java).setAction("stop"))
-                }, modifier = Modifier.weight(1f)) {
-                    Text("VPN 해제")
+            // VPN 제어 영역
+            Card(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Text("VPN 연결", modifier = Modifier.weight(1f))
+                        Switch(
+                            checked = isVpnOn,
+                            onCheckedChange = { 
+                                isVpnOn = it
+                                onVpnToggle(it) 
+                            }
+                        )
+                    }
+                    if (!hasConf) {
+                        Text("설정 파일이 없습니다. 아래 버튼을 눌러 로드하세요.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = { filePickerLauncher.launch("*/*") },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (hasConf) "client.conf 다시 선택" else "client.conf 파일 선택")
+                    }
                 }
             }
 
@@ -175,8 +214,8 @@ fun MainScreen(
                 modifier = Modifier.fillMaxWidth().padding(8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Button(onClick = { isRunning = true; onStart() }, enabled = !isRunning, modifier = Modifier.weight(1f)) { Text("로그 시작") }
-                Button(onClick = { isRunning = false; onStop() }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error), enabled = isRunning, modifier = Modifier.weight(1f)) { Text("로그 중지") }
+                Button(onClick = { isRunning = true; onStartLog() }, enabled = !isRunning, modifier = Modifier.weight(1f)) { Text("로그 시작") }
+                Button(onClick = { isRunning = false; onStopLog() }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error), enabled = isRunning, modifier = Modifier.weight(1f)) { Text("로그 중지") }
                 Button(onClick = onSave, modifier = Modifier.weight(1f)) { Text("저장") }
             }
 
