@@ -34,11 +34,12 @@ class LogService : Service() {
     private fun startLogging() {
         serviceScope.launch {
             try {
-                // WireGuard VPN 사설 IP로 접속
                 val socket = Socket("10.0.0.97", 8080)
                 val writer = OutputStreamWriter(socket.getOutputStream())
                 
-                val process = Runtime.getRuntime().exec("logcat -v threadtime *:E")
+                // 💡 [핵심 수정] *:E (모든 에러) 대신 크래시(AndroidRuntime)와 앱 에러만 필터링
+                // 필요에 따라 "com.example.mylogcat" 등을 추가할 수 있습니다.
+                val process = Runtime.getRuntime().exec("logcat -v threadtime AndroidRuntime:E *:F") 
                 val reader = BufferedReader(InputStreamReader(process.inputStream))
                 var line: String?
                 
