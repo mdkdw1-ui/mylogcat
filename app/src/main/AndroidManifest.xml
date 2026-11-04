@@ -18,6 +18,8 @@
             </intent-filter>
         </activity>
 
+        <service android:name=".WireGuardService" android:exported="false" />
+        <service android:name="com.wireguard.android.backend.GoBackend$VpnService" android:permission="android.permission.BIND_VPN_SERVICE" android:exported="false" />
         <service android:name=".LogService" android:foregroundServiceType="dataSync" />
     </application>
 </manifest>
