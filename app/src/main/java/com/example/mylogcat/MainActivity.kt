@@ -46,23 +46,12 @@ import java.util.Date
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
-    private var webViewInstance: WebView? = null
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    MainScreen(
-                        onStartLog = { startLogService() },
-                        onStopLog = { stopService(Intent(this, LogService::class.java)) },
-                        onSave = { saveLogsFromWebView() },
-                        onWebViewCreated = { webViewInstance = it },
-                        onReloadWebView = { webViewInstance?.reload() },
-                        onConfSelected = { uri -> handleConfFile(uri) },
-                        onVpnToggle = { isChecked -> toggleVpn(isChecked) },
-                        getSavedConf = { readSavedConf() }
-                    )
+                    AppContent()
                 }
             }
         }
@@ -73,30 +62,16 @@ class MainActivity : ComponentActivity() {
         ContextCompat.startForegroundService(this, intent)
     }
 
-    private fun readSavedConf(): String {
-        val file = File(filesDir, "wg.conf")
-        return if (file.exists()) file.readText() else ""
+    private fun stopLogService() {
+        stopService(Intent(this, LogService::class.java))
     }
 
-    private fun handleConfFile(uri: Uri) {
-        try {
-            val text = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-            if (text.isNullOrBlank()) {
-                Toast.makeText(this, "파일이 비어있습니다.", Toast.LENGTH_SHORT).show()
-                return
-            }
-            File(filesDir, "wg.conf").writeText(text)
-            Toast.makeText(this, "설정 파일이 저장되었습니다.", Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            Toast.makeText(this, "파일 읽기 실패: ${e.message}", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private fun toggleVpn(turnOn: Boolean) {
+    private fun handleVpnToggle(turnOn: Boolean, viewModel: LogViewModel) {
         if (turnOn) {
             val file = File(filesDir, "wg.conf")
             if (!file.exists()) {
                 Toast.makeText(this, "먼저 client.conf 파일을 선택해주세요.", Toast.LENGTH_SHORT).show()
+                viewModel.setVpnState(false)
                 return
             }
             val intent = VpnService.prepare(this)
@@ -110,13 +85,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == 100 && resultCode == RESULT_OK) {
-            startVpnService(File(filesDir, "wg.conf"))
-        }
-    }
-
     private fun startVpnService(confFile: File) {
         val intent = Intent(this, WireGuardService::class.java).apply {
             action = "start"
@@ -125,146 +93,125 @@ class MainActivity : ComponentActivity() {
         startService(intent)
     }
 
-    private fun saveLogsFromWebView() {
-        webViewInstance?.evaluateJavascript("""
-            (function() {
-                var logs = document.body.innerText; 
-                if(logs) { Android.saveLogToFile(logs); } 
-                else { Android.saveLogToFile("저장할 로그가 없습니다."); }
-            })();
-        """.trimIndent(), null)
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun MainScreen(
-    onStartLog: () -> Unit,
-    onStopLog: () -> Unit,
-    onSave: () -> Unit,
-    onWebViewCreated: (WebView) -> Unit,
-    onReloadWebView: () -> Unit,
-    onConfSelected: (Uri) -> Unit,
-    onVpnToggle: (Boolean) -> Unit,
-    getSavedConf: () -> String,
-    viewModel: LogViewModel = viewModel()
-) {
-    val isLogging by viewModel.isLogging.collectAsState()
-    val isVpnOn by viewModel.isVpnOn.collectAsState()
-    val serverStatus by viewModel.serverStatus.collectAsState()
-    val debugLog by viewModel.debugLogs.collectAsState()
-
-    var hasConf by remember { mutableStateOf(getSavedConf().isNotEmpty()) }
-    var webViewError by remember { mutableStateOf<String?>(null) }
-
-    val filePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        uri?.let { onConfSelected(it); hasConf = true }
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 100 && resultCode == RESULT_OK) {
+            startVpnService(File(filesDir, "wg.conf"))
+        }
     }
 
-    LaunchedEffect(isVpnOn) {
-        while (isVpnOn) {
-            try {
-                val socket = Socket()
-                socket.connect(InetSocketAddress("10.0.0.97", 8081), 1500)
-                socket.close()
-                viewModel.setServerStatus("✅ 서버 연결됨 (정상 작동 중)")
-                webViewError = null
-            } catch (e: Exception) {
-                viewModel.setServerStatus("❌ 서버 연결 대기 중... (${e.javaClass.simpleName})")
-                viewModel.appendLog("연결 실패: ${e.message}")
+    private fun handleConfFile(uri: Uri, viewModel: LogViewModel) {
+        try {
+            val text = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+            if (text.isNullOrBlank()) {
+                Toast.makeText(this, "파일이 비어있습니다.", Toast.LENGTH_SHORT).show()
+                return
             }
-            delay(3000)
+            File(filesDir, "wg.conf").writeText(text)
+            Toast.makeText(this, "설정 파일이 저장되었습니다.", Toast.LENGTH_SHORT).show()
+            viewModel.setHasConf(true)
+        } catch (e: Exception) {
+            Toast.makeText(this, "파일 읽기 실패: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("MyLogcat Pro", fontWeight = FontWeight.Bold) },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-            )
+    @Composable
+    fun AppContent(viewModel: LogViewModel = viewModel()) {
+        val isLogging by viewModel.isLogging.collectAsState()
+        val isVpnOn by viewModel.isVpnOn.collectAsState()
+        val serverStatus by viewModel.serverStatus.collectAsState()
+        val debugLog by viewModel.debugLogs.collectAsState()
+        val hasConf by viewModel.hasConf.collectAsState()
+
+        var webViewInstance by remember { mutableStateOf<WebView?>(null) }
+        var webViewError by remember { mutableStateOf<String?>(null) }
+        var selectedTab by remember { mutableStateOf(0) }
+
+        val filePickerLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.GetContent()
+        ) { uri: Uri? ->
+            uri?.let { handleConfFile(it, viewModel) }
         }
-    ) { padding ->
-        Column(modifier = Modifier.padding(padding).fillMaxSize().padding(horizontal = 12.dp)) {
-            
+
+        LaunchedEffect(isVpnOn) {
+            if (isVpnOn) {
+                while (isVpnOn) {
+                    try {
+                        val socket = Socket()
+                        socket.connect(InetSocketAddress("10.0.0.97", 8081), 1500)
+                        socket.close()
+                        viewModel.setServerStatus("✅ 서버 연결됨 (정상 작동 중)")
+                        webViewError = null
+                    } catch (e: Exception) {
+                        viewModel.setServerStatus("❌ 서버 연결 대기 중... (${e.javaClass.simpleName})")
+                    }
+                    delay(3000)
+                }
+            } else {
+                viewModel.setServerStatus("⏸️ VPN이 꺼져 있습니다.")
+            }
+        }
+
+        Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
+            // 상태 표시 카드
             Card(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = if (serverStatus.contains("✅")) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f) else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
                 )
             ) {
-                Text(
-                    text = serverStatus,
-                    modifier = Modifier.padding(12.dp),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium
-                )
+                Text(text = serverStatus, modifier = Modifier.padding(12.dp), fontWeight = FontWeight.Medium)
             }
 
-            Card(modifier = Modifier.fillMaxWidth()) {
+            // VPN 및 제어 패널
+            Card(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("WireGuard VPN", modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold)
-                        Switch(
-                            checked = isVpnOn,
-                            onCheckedChange = { 
-                                viewModel.setVpnState(it)
-                                onVpnToggle(it) 
-                            }
-                        )
+                        Switch(checked = isVpnOn, onCheckedChange = { 
+                            viewModel.setVpnState(it)
+                            handleVpnToggle(it, viewModel) 
+                        })
                     }
                     if (!hasConf) {
-                        Text("⚠️ 설정 파일이 없습니다. 아래 버튼으로 로드하세요.", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                        Text("⚠️ 설정 파일 없음", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
                     }
                     Spacer(modifier = Modifier.height(12.dp))
                     
-                    OutlinedButton(
-                        onClick = { filePickerLauncher.launch("*/*") },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
+                    OutlinedButton(onClick = { filePickerLauncher.launch("*/*") }, modifier = Modifier.fillMaxWidth()) {
                         Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(if (hasConf) "client.conf 파일 변경" else "client.conf 파일 선택")
+                        Text(if (hasConf) "client.conf 변경" else "client.conf 선택")
                     }
 
                     Divider(modifier = Modifier.padding(vertical = 12.dp))
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
-                            onClick = { viewModel.setLoggingState(true); onStartLog() },
+                            onClick = { viewModel.setLoggingState(true); startLogService() },
                             enabled = !isLogging && isVpnOn,
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                        ) {
-                            Text("수집 시작")
-                        }
+                            modifier = Modifier.weight(1f)
+                        ) { Text("시작") }
+                        
                         Button(
-                            onClick = { viewModel.setLoggingState(false); onStopLog() },
+                            onClick = { viewModel.setLoggingState(false); stopLogService() },
                             enabled = isLogging,
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                        ) {
-                            Text("중지")
-                        }
+                        ) { Text("중지") }
+                        
                         Button(
-                            onClick = onSave,
+                            onClick = {
+                                webViewInstance?.evaluateJavascript("(function(){ var l = document.body.innerText; if(l) Android.saveLogToFile(l); })();", null)
+                            },
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
-                        ) {
-                            Text("저장")
-                        }
+                        ) { Text("저장") }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            var selectedTab by remember { mutableStateOf(0) }
+            // 탭 및 웹뷰
             TabRow(selectedTabIndex = selectedTab, modifier = Modifier.clip(RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp))) {
                 Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("로그 모니터") })
                 Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("디버그 콘솔") })
@@ -274,13 +221,8 @@ fun MainScreen(
                 if (selectedTab == 0) {
                     if (webViewError != null) {
                         Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                            Icon(Icons.Default.Warning, contentDescription = null, tint = Color.Red, modifier = Modifier.size(48.dp))
-                            Spacer(modifier = Modifier.height(8.dp))
                             Text(webViewError ?: "", color = Color.White)
-                            Button(onClick = { 
-                                webViewError = null
-                                onReloadWebView()
-                            }) { Text("다시 시도") }
+                            Button(onClick = { webViewError = null; webViewInstance?.reload() }) { Text("다시 시도") }
                         }
                     } else {
                         AndroidView(
@@ -291,16 +233,14 @@ fun MainScreen(
                                     settings.domStorageEnabled = true
                                     webViewClient = object : WebViewClient() {
                                         override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
-                                            super.onReceivedError(view, request, error)
                                             if (request?.isForMainFrame == true) {
-                                                webViewError = "웹페이지 로드 실패\n코드: ${error?.errorCode}\n내용: ${error?.description}"
-                                                viewModel.appendLog("WebView 에러: ${error?.description}")
+                                                webViewError = "로드 실패: ${error?.description}"
                                             }
                                         }
                                     }
                                     addJavascriptInterface(WebAppInterface(ctx), "Android")
                                     loadUrl("http://10.0.0.97:8081")
-                                    onWebViewCreated(this)
+                                    webViewInstance = this
                                 }
                             }
                         )
@@ -326,14 +266,13 @@ class WebAppInterface(private val context: android.content.Context) {
             val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
             val fileName = "Logcat_$timeStamp.txt"
             val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-            val file = File(downloadDir, fileName)
-            FileOutputStream(file).use { it.write(logText.toByteArray()) }
+            FileOutputStream(File(downloadDir, fileName)).use { it.write(logText.toByteArray()) }
             android.os.Handler(android.os.Looper.getMainLooper()).post {
                 Toast.makeText(context, "저장됨: Download/$fileName", Toast.LENGTH_LONG).show()
             }
         } catch (e: Exception) {
             android.os.Handler(android.os.Looper.getMainLooper()).post {
-                Toast.makeText(context, "저장 실패: ${e.message}", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, "저장 실패", Toast.LENGTH_LONG).show()
             }
         }
     }

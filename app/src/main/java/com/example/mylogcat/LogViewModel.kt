@@ -11,17 +11,20 @@ class LogViewModel : ViewModel() {
     private val _isLogging = MutableStateFlow(false)
     val isLogging: StateFlow<Boolean> = _isLogging
 
-    private val _serverStatus = MutableStateFlow("서버 확인 중...")
+    private val _serverStatus = MutableStateFlow("대기 중...")
     val serverStatus: StateFlow<String> = _serverStatus
 
-    private val _debugLogs = MutableStateFlow("대기 중...\n")
+    private val _debugLogs = MutableStateFlow("앱 준비 완료\n")
     val debugLogs: StateFlow<String> = _debugLogs
+
+    private val _hasConf = MutableStateFlow(false)
+    val hasConf: StateFlow<Boolean> = _hasConf
 
     fun setVpnState(isOn: Boolean) { _isVpnOn.value = isOn }
     fun setLoggingState(isLogging: Boolean) { _isLogging.value = isLogging }
     fun setServerStatus(status: String) { _serverStatus.value = status }
+    fun setHasConf(has: Boolean) { _hasConf.value = has }
     
-    // 디버그 로그 무한 증가 방지 (최대 500줄 유지)
     fun appendLog(log: String) {
         val current = _debugLogs.value
         val newLog = current + log + "\n"
