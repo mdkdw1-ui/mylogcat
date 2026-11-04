@@ -101,6 +101,7 @@ class MainActivity : ComponentActivity() {
         val logs by viewModel.logs.collectAsState()
         
         var isCollecting by remember { mutableStateOf(false) }
+        var showOnlyErrors by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
         val context = LocalContext.current
         val listState = rememberLazyListState()
@@ -150,6 +151,10 @@ class MainActivity : ComponentActivity() {
                         Text("⚠️ client.conf 파일을 로드하세요.", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
                     }
                     Spacer(modifier = Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 4.dp)) {
+                        Text("에러(Error) 로그만 보기", fontSize = 12.sp, modifier = Modifier.weight(1f))
+                        Checkbox(checked = showOnlyErrors, onCheckedChange = { showOnlyErrors = it })
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = { filePickerLauncher.launch("*/*") }, modifier = Modifier.weight(1f)) {
                             Text(if (hasConf) "conf 변경" else "conf 로드", fontSize = 12.sp)
@@ -205,7 +210,7 @@ class MainActivity : ComponentActivity() {
                         state = listState,
                         modifier = Modifier.fillMaxSize().padding(8.dp)
                     ) {
-                        items(logs) { logLine ->
+                        items(logs.filter { if (showOnlyErrors) it.contains(" E ") || it.contains("FATAL") || it.contains("Exception") else true }) { logLine ->
                             Text(
                                 text = logLine,
                                 color = if (logLine.contains(" E ") || logLine.contains("FATAL")) Color.Red else Color.Green,
