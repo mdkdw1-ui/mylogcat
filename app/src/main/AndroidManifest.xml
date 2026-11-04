@@ -10,6 +10,7 @@
         android:label="MyLogcat"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
+        android:hardwareAccelerated="true"
         android:theme="@style/Theme.Material3.DayNight.NoActionBar">
         
         <activity android:name=".MainActivity" android:exported="true">

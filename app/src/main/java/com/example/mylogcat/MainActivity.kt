@@ -124,6 +124,7 @@ class MainActivity : ComponentActivity() {
         val hasConf by viewModel.hasConf.collectAsState()
 
         var webViewInstance by remember { mutableStateOf<WebView?>(null) }
+        var isUiReady by remember { mutableStateOf(false) }
         var webViewError by remember { mutableStateOf<String?>(null) }
         var selectedTab by remember { mutableStateOf(0) }
 
@@ -132,6 +133,8 @@ class MainActivity : ComponentActivity() {
         ) { uri: Uri? ->
             uri?.let { handleConfFile(it, viewModel) }
         }
+
+        LaunchedEffect(Unit) { isUiReady = true }
 
         LaunchedEffect(isVpnOn) {
             if (isVpnOn) {
@@ -225,10 +228,11 @@ class MainActivity : ComponentActivity() {
                             Button(onClick = { webViewError = null; webViewInstance?.reload() }) { Text("다시 시도") }
                         }
                     } else {
-                        AndroidView(
-                            modifier = Modifier.fillMaxSize(),
-                            factory = { ctx ->
-                                WebView(ctx).apply {
+                        if (isUiReady) {
+                            AndroidView(
+                                modifier = Modifier.fillMaxSize(),
+                                factory = { ctx ->
+                                    WebView(ctx).apply {
                                     settings.javaScriptEnabled = true
                                     settings.domStorageEnabled = true
                                     webViewClient = object : WebViewClient() {
@@ -240,10 +244,11 @@ class MainActivity : ComponentActivity() {
                                     }
                                     addJavascriptInterface(WebAppInterface(ctx), "Android")
                                     loadUrl("http://10.0.0.97:8081")
-                                    webViewInstance = this
+                                        webViewInstance = this
+                                    }
                                 }
-                            }
-                        )
+                            )
+                        }
                     }
                 } else {
                     Text(
