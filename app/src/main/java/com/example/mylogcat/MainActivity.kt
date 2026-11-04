@@ -63,7 +63,7 @@ fun MainScreen(onStart: () -> Unit, onStop: () -> Unit) {
                     WebView(context).apply {
                         settings.javaScriptEnabled = true
                         webViewClient = WebViewClient()
-                        loadUrl("http://10.0.0.252:8081")
+                        loadUrl("http://10.0.0.97:8081")
                     }
                 }
             )

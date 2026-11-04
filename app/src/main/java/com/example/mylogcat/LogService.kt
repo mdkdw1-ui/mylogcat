@@ -35,7 +35,7 @@ class LogService : Service() {
         serviceScope.launch {
             try {
                 // WireGuard VPN 사설 IP로 접속
-                val socket = Socket("10.0.0.252", 8080)
+                val socket = Socket("10.0.0.97", 8080)
                 val writer = OutputStreamWriter(socket.getOutputStream())
                 
                 val process = Runtime.getRuntime().exec("logcat -v threadtime *:E")
