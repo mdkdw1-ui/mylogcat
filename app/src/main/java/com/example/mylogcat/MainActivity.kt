@@ -26,9 +26,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -58,6 +58,7 @@ class MainActivity : ComponentActivity() {
                         onStopLog = { stopService(Intent(this, LogService::class.java)) },
                         onSave = { saveLogsFromWebView() },
                         onWebViewCreated = { webViewInstance = it },
+                        onReloadWebView = { webViewInstance?.reload() },
                         onConfSelected = { uri -> handleConfFile(uri) },
                         onVpnToggle = { isChecked -> toggleVpn(isChecked) },
                         getSavedConf = { readSavedConf() }
@@ -142,6 +143,7 @@ fun MainScreen(
     onStopLog: () -> Unit,
     onSave: () -> Unit,
     onWebViewCreated: (WebView) -> Unit,
+    onReloadWebView: () -> Unit,
     onConfSelected: (Uri) -> Unit,
     onVpnToggle: (Boolean) -> Unit,
     getSavedConf: () -> String,
@@ -152,7 +154,6 @@ fun MainScreen(
     val serverStatus by viewModel.serverStatus.collectAsState()
     val debugLog by viewModel.debugLogs.collectAsState()
 
-    val context = LocalContext.current
     var hasConf by remember { mutableStateOf(getSavedConf().isNotEmpty()) }
     var webViewError by remember { mutableStateOf<String?>(null) }
 
@@ -162,7 +163,6 @@ fun MainScreen(
         uri?.let { onConfSelected(it); hasConf = true }
     }
 
-    // VPN 상태 체크 루프
     LaunchedEffect(isVpnOn) {
         while (isVpnOn) {
             try {
@@ -192,7 +192,6 @@ fun MainScreen(
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize().padding(horizontal = 12.dp)) {
             
-            // 1. 서버 연결 상태 카드
             Card(
                 modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                 colors = CardDefaults.cardColors(
@@ -207,7 +206,6 @@ fun MainScreen(
                 )
             }
 
-            // 2. 제어 패널 카드
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -258,7 +256,7 @@ fun MainScreen(
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
                         ) {
-                            Text("복사/저장")
+                            Text("저장")
                         }
                     }
                 }
@@ -266,16 +264,14 @@ fun MainScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // 3. 웹뷰 및 디버그 로그 (탭 형태로 전환)
             var selectedTab by remember { mutableStateOf(0) }
             TabRow(selectedTabIndex = selectedTab, modifier = Modifier.clip(RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp))) {
-                Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("로그 모니터 (Web)") })
-                Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("앱 디버그 콘솔") })
+                Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("로그 모니터") })
+                Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("디버그 콘솔") })
             }
 
             Box(modifier = Modifier.weight(1f).fillMaxWidth().background(Color.Black)) {
                 if (selectedTab == 0) {
-                    // 웹뷰 화면
                     if (webViewError != null) {
                         Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                             Icon(Icons.Default.Warning, contentDescription = null, tint = Color.Red, modifier = Modifier.size(48.dp))
@@ -283,7 +279,7 @@ fun MainScreen(
                             Text(webViewError ?: "", color = Color.White)
                             Button(onClick = { 
                                 webViewError = null
-                                webViewInstance?.reload() 
+                                onReloadWebView()
                             }) { Text("다시 시도") }
                         }
                     } else {
@@ -310,7 +306,6 @@ fun MainScreen(
                         )
                     }
                 } else {
-                    // 디버그 로그 콘솔 화면
                     Text(
                         text = debugLog,
                         color = Color.Green,
