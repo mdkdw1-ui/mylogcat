@@ -21,6 +21,9 @@ class LogViewModel : ViewModel() {
 
     private var logProcess: Process? = null
 
+    @Volatile
+    private var isRunning = false
+
     fun setVpnState(isOn: Boolean) {
         _isVpnOn.value = isOn
     }
@@ -41,31 +44,47 @@ class LogViewModel : ViewModel() {
     }
 
     fun stopLogcat() {
+        isRunning = false
+
         try {
             logProcess?.destroy()
         } catch (_: Exception) {
         }
+
         logProcess = null
     }
 
     suspend fun startLiveLogcat() = withContext(Dispatchers.IO) {
         stopLogcat()
         _logs.value = emptyList()
+        isRunning = true
 
         try {
             val process = Runtime.getRuntime()
                 .exec(arrayOf("logcat", "-v", "time", "-T", "1"))
+
             logProcess = process
 
             val reader = BufferedReader(InputStreamReader(process.inputStream))
             var line: String?
 
-            while (reader.readLine().also { line = it } != null) {
+            while (isRunning && reader.readLine().also { line = it } != null) {
                 line?.let { addLog(it) }
             }
         } catch (e: Exception) {
-            addLog("logcat 시작 실패: ${e.message}")
-            addLog("adb shell pm grant com.example.mylogcat android.permission.READ_LOGS 를 실행하세요.")
+            if (isRunning) {
+                addLog("logcat 시작 실패: ${e.message}")
+                addLog("adb shell pm grant com.example.mylogcat android.permission.READ_LOGS 를 실행하세요.")
+            }
+        } finally {
+            isRunning = false
+
+            try {
+                logProcess?.destroy()
+            } catch (_: Exception) {
+            }
+
+            logProcess = null
         }
     }
 
@@ -73,6 +92,7 @@ class LogViewModel : ViewModel() {
         try {
             val process = Runtime.getRuntime()
                 .exec(arrayOf("logcat", "-d", "-b", "crash", "-v", "time", "-t", "100"))
+
             val reader = BufferedReader(InputStreamReader(process.inputStream))
             val pastLogs = mutableListOf<String>()
             var line: String?
