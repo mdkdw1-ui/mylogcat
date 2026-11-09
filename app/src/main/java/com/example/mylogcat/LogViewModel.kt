@@ -9,6 +9,7 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 
 class LogViewModel : ViewModel() {
+
     private val _isVpnOn = MutableStateFlow(false)
     val isVpnOn: StateFlow<Boolean> = _isVpnOn
 
@@ -18,31 +19,80 @@ class LogViewModel : ViewModel() {
     private val _logs = MutableStateFlow<List<String>>(emptyList())
     val logs: StateFlow<List<String>> = _logs
 
-    fun setVpnState(isOn: Boolean) { _isVpnOn.value = isOn }
-    fun setHasConf(has: Boolean) { _hasConf.value = has }
+    private var logProcess: Process? = null
+
+    fun setVpnState(isOn: Boolean) {
+        _isVpnOn.value = isOn
+    }
+
+    fun setHasConf(has: Boolean) {
+        _hasConf.value = has
+    }
 
     fun addLog(line: String) {
         val current = _logs.value.toMutableList()
         current.add(line)
-        if (current.size > 3000) { current.removeAt(0) }
+        if (current.size > 3000) current.removeAt(0)
         _logs.value = current
     }
 
-    fun clearLogs() { _logs.value = emptyList() }
+    fun clearLogs() {
+        _logs.value = emptyList()
+    }
 
-    // ★ 앱 실행 시 과거의 'Crash(크래시)' 버퍼 로그를 가져와 화면에 띄움
-    suspend fun loadPastCrashLogs() = withContext(Dispatchers.IO) {
+    fun stopLogcat() {
         try {
-            val process = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-b", "crash", "-v", "time", "-t", "100"))
+            logProcess?.destroy()
+        } catch (_: Exception) {
+        }
+        logProcess = null
+    }
+
+    suspend fun startLiveLogcat() = withContext(Dispatchers.IO) {
+        stopLogcat()
+        _logs.value = emptyList()
+
+        try {
+            val process = Runtime.getRuntime()
+                .exec(arrayOf("logcat", "-v", "time", "-T", "1"))
+            logProcess = process
+
             val reader = BufferedReader(InputStreamReader(process.inputStream))
             var line: String?
+
+            while (reader.readLine().also { line = it } != null) {
+                line?.let { addLog(it) }
+            }
+        } catch (e: Exception) {
+            addLog("logcat 시작 실패: ${e.message}")
+            addLog("adb shell pm grant com.example.mylogcat android.permission.READ_LOGS 를 실행하세요.")
+        }
+    }
+
+    suspend fun loadPastCrashLogs() = withContext(Dispatchers.IO) {
+        try {
+            val process = Runtime.getRuntime()
+                .exec(arrayOf("logcat", "-d", "-b", "crash", "-v", "time", "-t", "100"))
+            val reader = BufferedReader(InputStreamReader(process.inputStream))
             val pastLogs = mutableListOf<String>()
+            var line: String?
+
             while (reader.readLine().also { line = it } != null) {
                 line?.let { pastLogs.add(it) }
             }
+
             if (pastLogs.isNotEmpty()) {
                 _logs.value = pastLogs
             }
-        } catch (e: Exception) {}
+
+            process.destroy()
+        } catch (e: Exception) {
+            addLog("크래시 로그 읽기 실패: ${e.message}")
+        }
+    }
+
+    override fun onCleared() {
+        stopLogcat()
+        super.onCleared()
     }
 }

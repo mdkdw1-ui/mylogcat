@@ -1,0 +1,573 @@
+===== ./.github/workflows/build.yml =====
+name: Build APK
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mylogcat-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+-e 
+
+===== ./app/build.gradle.kts =====
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+
+android {
+    namespace = "com.example.mylogcat"
+    compileSdk = 34
+
+    defaultConfig {
+        applicationId = "com.example.mylogcat"
+        minSdk = 26
+        targetSdk = 34
+        versionCode = 1
+        versionName = "1.0"
+    }
+
+    buildFeatures {
+        compose = true
+    }
+    composeOptions {
+        kotlinCompilerExtensionVersion = "1.5.8"
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
+    implementation("com.wireguard.android:tunnel:1.0.20230706")
+    implementation("androidx.core:core-ktx:1.12.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
+    implementation("androidx.activity:activity-compose:1.8.2")
+    implementation(platform("androidx.compose:compose-bom:2024.02.00"))
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-graphics")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.compose.material3:material3:1.2.0")
+    implementation("androidx.webkit:webkit:1.10.0")
+}
+-e 
+
+===== ./app/src/main/AndroidManifest.xml =====
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.READ_LOGS" />
+
+    <application
+        android:allowBackup="true"
+        android:label="MyLogcat"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
+        android:hardwareAccelerated="true"
+        android:theme="@style/Theme.Material3.DayNight.NoActionBar">
+        
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service android:name=".WireGuardService" android:exported="false" />
+        <service android:name="com.wireguard.android.backend.GoBackend$VpnService" android:permission="android.permission.BIND_VPN_SERVICE" android:exported="false" />
+    </application>
+</manifest>
+-e 
+
+===== ./app/src/main/java/com/example/mylogcat/LogViewModel.kt =====
+package com.example.mylogcat
+
+import androidx.lifecycle.ViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.BufferedReader
+import java.io.InputStreamReader
+
+class LogViewModel : ViewModel() {
+    private val _isVpnOn = MutableStateFlow(false)
+    val isVpnOn: StateFlow<Boolean> = _isVpnOn
+
+    private val _hasConf = MutableStateFlow(false)
+    val hasConf: StateFlow<Boolean> = _hasConf
+
+    private val _logs = MutableStateFlow<List<String>>(emptyList())
+    val logs: StateFlow<List<String>> = _logs
+
+    fun setVpnState(isOn: Boolean) { _isVpnOn.value = isOn }
+    fun setHasConf(has: Boolean) { _hasConf.value = has }
+
+    fun addLog(line: String) {
+        val current = _logs.value.toMutableList()
+        current.add(line)
+        if (current.size > 3000) { current.removeAt(0) }
+        _logs.value = current
+    }
+
+    fun clearLogs() { _logs.value = emptyList() }
+
+    // ★ 앱 실행 시 과거의 'Crash(크래시)' 버퍼 로그를 가져와 화면에 띄움
+    suspend fun loadPastCrashLogs() = withContext(Dispatchers.IO) {
+        try {
+            val process = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-b", "crash", "-v", "time", "-t", "100"))
+            val reader = BufferedReader(InputStreamReader(process.inputStream))
+            var line: String?
+            val pastLogs = mutableListOf<String>()
+            while (reader.readLine().also { line = it } != null) {
+                line?.let { pastLogs.add(it) }
+            }
+            if (pastLogs.isNotEmpty()) {
+                _logs.value = pastLogs
+            }
+        } catch (e: Exception) {}
+    }
+}
+-e 
+
+===== ./app/src/main/java/com/example/mylogcat/MainActivity.kt =====
+package com.example.mylogcat
+
+import android.content.Intent
+import android.net.Uri
+import android.net.VpnService
+import android.os.Bundle
+import android.os.Environment
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.BufferedReader
+import java.io.File
+import java.io.FileOutputStream
+import java.io.InputStreamReader
+import java.text.SimpleDateFormat
+import java.util.*
+
+// 프리미엄 색상 팔레트 정의
+val DarkBackground = Color(0xFF1E1E24)
+val CardBackground = Color(0xFF2B2B36)
+val NeonCyan = Color(0xFF00E5FF)
+val NeonPurple = Color(0xFFB388FF)
+val TextGray = Color(0xFFB0B0B0)
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            MaterialTheme(
+                colorScheme = darkColorScheme(
+                    primary = NeonCyan,
+                    secondary = NeonPurple,
+                    background = DarkBackground,
+                    surface = CardBackground
+                )
+            ) {
+                Surface(modifier = Modifier.fillMaxSize(), color = DarkBackground) {
+                    AppContent()
+                }
+            }
+        }
+    }
+
+    // ... (VPN 토글, 서비스 시작 등 기존 로직 동일) ...
+    private fun handleVpnToggle(turnOn: Boolean, viewModel: LogViewModel) {
+        if (turnOn) {
+            val file = File(filesDir, "wg.conf")
+            if (!file.exists()) { viewModel.setVpnState(false); return }
+            val intent = VpnService.prepare(this)
+            if (intent != null) startActivityForResult(intent, 100) else startVpnService(file)
+        } else {
+            stopService(Intent(this, WireGuardService::class.java).setAction("stop"))
+        }
+    }
+    private fun startVpnService(confFile: File) {
+        startService(Intent(this, WireGuardService::class.java).apply { action = "start"; putExtra("confPath", confFile.absolutePath) })
+    }
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 100 && resultCode == RESULT_OK) startVpnService(File(filesDir, "wg.conf"))
+    }
+    private fun handleConfFile(uri: Uri, viewModel: LogViewModel) {
+        try {
+            val text = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+            if (!text.isNullOrBlank()) { File(filesDir, "wg.conf").writeText(text); viewModel.setHasConf(true) }
+        } catch (e: Exception) {}
+    }
+
+    @Composable
+    fun AppContent(viewModel: LogViewModel = viewModel()) {
+        val isVpnOn by viewModel.isVpnOn.collectAsState()
+        val hasConf by viewModel.hasConf.collectAsState()
+        val logs by viewModel.logs.collectAsState()
+        
+        var isCollecting by remember { mutableStateOf(false) }
+        var showOnlyErrors by remember { mutableStateOf(false) }
+        var isUserScrolling by remember { mutableStateOf(false) }
+        val context = LocalContext.current
+        val listState = rememberLazyListState()
+        val scope = rememberCoroutineScope()
+
+        val filePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+            uri?.let { handleConfFile(it, viewModel) }
+        }
+
+        // 로그 수집 로직
+        LaunchedEffect(isCollecting) {
+            if (isCollecting) {
+                viewModel.clearLogs()
+                withContext(Dispatchers.IO) {
+                    try {
+                        val process = Runtime.getRuntime().exec("logcat -v time -T 1")
+                        val reader = BufferedReader(InputStreamReader(process.inputStream))
+                        var line: String? = null
+                        while (isCollecting && reader.readLine().also { line = it } != null) {
+                            line?.let { viewModel.addLog(it) }
+                        }
+                    } catch (e: Exception) {}
+                }
+            }
+        }
+
+        LaunchedEffect(logs.size) {
+            if (logs.isNotEmpty() && !isUserScrolling) listState.animateScrollToItem(logs.size - 1)
+        }
+        LaunchedEffect(listState.isScrollInProgress) { isUserScrolling = listState.isScrollInProgress }
+
+        Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+            
+            // --- 상단 헤더 ---
+            Text(
+                text = "MYLOGCAT PRO",
+                fontSize = 24.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = NeonCyan,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+
+            // --- VPN 제어 카드 (그라디에이션 배경) ---
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp).shadow(8.dp, RoundedCornerShape(16.dp)),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.Transparent)
+            ) {
+                Box(
+                    modifier = Modifier.background(
+                        Brush.linearGradient(listOf(Color(0xFF2A2A35), Color(0xFF1E1E24)))
+                    ).padding(16.dp)
+                ) {
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Security, contentDescription = null, tint = NeonPurple)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("WireGuard VPN", modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold, color = Color.White)
+                            Switch(
+                                checked = isVpnOn,
+                                onCheckedChange = { viewModel.setVpnState(it); handleVpnToggle(it, viewModel) },
+                                colors = SwitchDefaults.colors(checkedThumbColor = NeonCyan, checkedTrackColor = NeonCyan.copy(alpha = 0.5f))
+                            )
+                        }
+                        if (!hasConf) Text("⚠️ client.conf 파일 로드 필요", color = Color.Red, fontSize = 12.sp)
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Button(
+                            onClick = { filePickerLauncher.launch("*/*") },
+                            modifier = Modifier.fillMaxWidth().height(48.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3F3F50))
+                        ) {
+                            Icon(Icons.Default.Folder, contentDescription = null, tint = TextGray)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(if (hasConf) "설정 파일 변경" else "client.conf 선택", color = Color.White)
+                        }
+                    }
+                }
+            }
+
+            // --- 로그 제어 버튼 (입체감 있는 디자인) ---
+            Row(modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                // 수집 시작/중지 버튼 (그라디에이션)
+                Button(
+                    onClick = { isCollecting = !isCollecting },
+                    modifier = Modifier.weight(1f).height(56.dp).shadow(6.dp, RoundedCornerShape(12.dp)),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
+                    contentPadding = PaddingValues()
+                ) {
+                    Box(
+                        modifier = Modifier.fillMaxSize().background(
+                            Brush.horizontalGradient(
+                                if (isCollecting) listOf(Color(0xFFFF5252), Color(0xFFD50000))
+                                else listOf(NeonCyan, Color(0xFF00B0FF))
+                            )
+                        ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(if (isCollecting) "수집 중지" else "로그 수집", fontWeight = FontWeight.Bold, color = Color.Black)
+                    }
+                }
+
+                // 파일 저장 버튼
+                Button(
+                    onClick = {
+                        val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+                        val file = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Logcat_$timeStamp.txt")
+                        try {
+                            FileOutputStream(file).use { it.write(logs.joinToString("\n").toByteArray()) }
+                            android.widget.Toast.makeText(context, "저장됨: ${file.name}", android.widget.Toast.LENGTH_SHORT).show()
+                        } catch (e: Exception) {}
+                    },
+                    modifier = Modifier.weight(1f).height(56.dp).shadow(6.dp, RoundedCornerShape(12.dp)),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = NeonPurple)
+                ) {
+                    Icon(Icons.Default.Save, contentDescription = null, tint = Color.Black)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("파일 저장", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            // --- 에러만 보기 필터 ---
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(8.dp)).background(CardBackground).clickable { showOnlyErrors = !showOnlyErrors }.padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Checkbox(
+                    checked = showOnlyErrors,
+                    onCheckedChange = { showOnlyErrors = it },
+                    colors = CheckboxDefaults.colors(checkedColor = NeonCyan)
+                )
+                Text("에러(Error) 및 크래시 로그만 보기", color = Color.White, fontSize = 14.sp)
+            }
+
+            // --- 로그 출력 창 (터미널 느낌) ---
+            Box(
+                modifier = Modifier.weight(1f).fillMaxWidth()
+                    .shadow(8.dp, RoundedCornerShape(12.dp))
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFF0F0F13)) // 아주 어두운 터미널 배경
+            ) {
+                if (logs.isEmpty()) {
+                    Text("로그 수집 버튼을 누르면\n실시간 로그가 여기에 표시됩니다.", color = TextGray, modifier = Modifier.align(Alignment.Center), fontSize = 14.sp)
+                } else {
+                    LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(12.dp)) {
+                        items(logs.filter { if (showOnlyErrors) it.contains(" E ") || it.contains("FATAL") || it.contains("Exception") else true }) { logLine ->
+                            Text(
+                                text = logLine,
+                                color = if (logLine.contains(" E ") || logLine.contains("FATAL")) Color(0xFFFF5252) else Color(0xFF69F0AE),
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                modifier = Modifier.padding(vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+-e 
+
+===== ./app/src/main/java/com/example/mylogcat/WireGuardService.kt =====
+package com.example.mylogcat
+
+import android.content.Intent
+import android.net.VpnService
+import android.os.IBinder
+import com.wireguard.android.backend.Backend
+import com.wireguard.android.backend.GoBackend
+import com.wireguard.android.backend.Tunnel
+import com.wireguard.config.Config
+import java.io.File
+
+class WireGuardService : android.app.Service() {
+    private var backend: Backend? = null
+    private var tunnel: Tunnel? = null
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            "start" -> {
+                val confPath = intent.getStringExtra("confPath") ?: return START_NOT_STICKY
+                if (VpnService.prepare(this) != null) { stopSelf(); return START_NOT_STICKY }
+                startWg(confPath)
+            }
+            "stop" -> stopWg()
+        }
+        return START_NOT_STICKY
+    }
+
+    private fun startWg(confPath: String) {
+        try {
+            val cfg = File(confPath).inputStream().use { Config.parse(it) }
+            backend = GoBackend(this)
+            tunnel = object : Tunnel {
+                override fun getName() = "mylogcat-wg"
+                override fun onStateChange(newState: Tunnel.State) {
+                    running = (newState == Tunnel.State.UP)
+                }
+            }
+            backend?.setState(tunnel, Tunnel.State.UP, cfg)
+            running = true
+        } catch (e: Exception) {
+            running = false
+            stopSelf()
+        }
+    }
+
+    private fun stopWg() {
+        try { if (tunnel != null) backend?.setState(tunnel, Tunnel.State.DOWN, null) } catch (_: Exception) {}
+        running = false
+        stopSelf()
+    }
+
+    override fun onDestroy() { stopWg(); super.onDestroy() }
+
+    companion object { @Volatile var running = false }
+}
+-e 
+
+===== ./app/src/main/res/layout/activity_main.xml =====
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+        <Button android:id="@+id/btnStart" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="시작" />
+        <Button android:id="@+id/btnStop" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="중지" />
+        <Button android:id="@+id/btnSave" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="저장" />
+    </LinearLayout>
+
+    <WebView
+        android:id="@+id/webView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+</LinearLayout>
+-e 
+
+===== ./app/src/main/res/values/strings.xml =====
+<resources>
+    <string name="app_name">MyLogcat</string>
+</resources>
+-e 
+
+===== ./app/src/main/res/values/themes.xml =====
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Material3.DayNight.NoActionBar" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#121212</item>
+    </style>
+</resources>
+-e 
+
+===== ./build.gradle.kts =====
+plugins {
+    id("com.android.application") version "8.2.2" apply false
+    id("org.jetbrains.kotlin.android") version "1.9.22" apply false
+}
+-e 
+
+===== ./gradle.properties =====
+org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+android.useAndroidX=true
+kotlin.code.style=official
+-e 
+
+===== ./gradle/wrapper/gradle-wrapper.properties =====
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.2-bin.zip
+networkTimeout=10000
+validateDistributionUrl=true
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+-e 
+
+===== ./settings.gradle.kts =====
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = "MyLogcat"
+include(":app")
+-e 
+
