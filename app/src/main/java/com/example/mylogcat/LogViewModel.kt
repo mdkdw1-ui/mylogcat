@@ -66,7 +66,7 @@ class LogViewModel : ViewModel() {
             logProcess = process
 
             val reader = BufferedReader(InputStreamReader(process.inputStream))
-            var line: String?
+            var line: String? = null
 
             while (isRunning && reader.readLine().also { line = it } != null) {
                 line?.let { addLog(it) }
@@ -95,7 +95,7 @@ class LogViewModel : ViewModel() {
 
             val reader = BufferedReader(InputStreamReader(process.inputStream))
             val pastLogs = mutableListOf<String>()
-            var line: String?
+            var line: String? = null
 
             while (reader.readLine().also { line = it } != null) {
                 line?.let { pastLogs.add(it) }
