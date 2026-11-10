@@ -35,7 +35,7 @@ class LogViewModel : ViewModel() {
     fun addLog(line: String) {
         val current = _logs.value.toMutableList()
         current.add(line)
-        if (current.size > 3000) current.removeAt(0)
+        if (current.size > 5000) current.removeAt(0)
         _logs.value = current
     }
 
@@ -74,7 +74,6 @@ class LogViewModel : ViewModel() {
         } catch (e: Exception) {
             if (isRunning) {
                 addLog("logcat 시작 실패: ${e.message}")
-                addLog("adb shell pm grant com.example.mylogcat android.permission.READ_LOGS 를 실행하세요.")
             }
         } finally {
             isRunning = false
@@ -88,23 +87,23 @@ class LogViewModel : ViewModel() {
         }
     }
 
-    suspend fun loadPastCrashLogs() = withContext(Dispatchers.IO) {
+    suspend fun loadCrashLogs() = withContext(Dispatchers.IO) {
+        stopLogcat()
+        _logs.value = emptyList()
+
         try {
             val process = Runtime.getRuntime()
-                .exec(arrayOf("logcat", "-d", "-b", "crash", "-v", "time", "-t", "100"))
+                .exec(arrayOf("logcat", "-d", "-b", "crash", "-v", "time"))
 
             val reader = BufferedReader(InputStreamReader(process.inputStream))
-            val pastLogs = mutableListOf<String>()
+            val crashLogs = mutableListOf<String>()
             var line: String? = null
 
             while (reader.readLine().also { line = it } != null) {
-                line?.let { pastLogs.add(it) }
+                line?.let { crashLogs.add(it) }
             }
 
-            if (pastLogs.isNotEmpty()) {
-                _logs.value = pastLogs
-            }
-
+            _logs.value = crashLogs
             process.destroy()
         } catch (e: Exception) {
             addLog("크래시 로그 읽기 실패: ${e.message}")
