@@ -419,15 +419,26 @@ class MainActivity : ComponentActivity() {
                             .fillMaxSize()
                             .padding(12.dp)
                     ) {
-                        val filteredLogs = logs.filter {
-                            if (showOnlyErrors) {
-                                it.contains(" E ") ||
-                                it.contains("FATAL") ||
-                                it.contains("Exception")
-                            } else {
-                                true
-                            }
-                        }
+                        val filteredLogs = logs.filter { line ->
+                val matchesSearch = searchText.isBlank() ||
+                    line.contains(searchText, ignoreCase = true)
+
+                val isError = line.contains(" E ") ||
+                    line.contains("FATAL") ||
+                    line.contains("Exception")
+
+                val isMyLogcat = line.contains("com.example.mylogcat", ignoreCase = true)
+
+                val isCrash = line.contains("FATAL", ignoreCase = true) ||
+                    line.contains("AndroidRuntime", ignoreCase = true) ||
+                    line.contains("Exception", ignoreCase = true)
+
+                val shouldShowMyLogcat = !isMyLogcat || isCrash
+
+                matchesSearch &&
+                    shouldShowMyLogcat &&
+                    (!showOnlyErrors || isError)
+            }
 
                         items(filteredLogs) { logLine ->
                             Text(
