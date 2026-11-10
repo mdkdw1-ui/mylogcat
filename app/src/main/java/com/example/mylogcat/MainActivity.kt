@@ -420,6 +420,8 @@ class MainActivity : ComponentActivity() {
                             .fillMaxSize()
                             .padding(12.dp)
                     ) {
+                        val ownPid = android.os.Process.myPid().toString()
+
                         val filteredLogs = logs.filter { line ->
                 val matchesSearch = searchText.isBlank() ||
                     line.contains(searchText, ignoreCase = true)
@@ -428,7 +430,8 @@ class MainActivity : ComponentActivity() {
                     line.contains("FATAL") ||
                     line.contains("Exception")
 
-                val isMyLogcat = line.contains("com.example.mylogcat", ignoreCase = true)
+                val isMyLogcat = line.contains("($ownPid)") ||
+                    line.contains("com.example.mylogcat", ignoreCase = true)
 
                 val isCrash = line.contains("FATAL", ignoreCase = true) ||
                     line.contains("AndroidRuntime", ignoreCase = true) ||
