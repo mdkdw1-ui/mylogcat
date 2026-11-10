@@ -141,6 +141,7 @@ class MainActivity : ComponentActivity() {
         var isCollecting by remember { mutableStateOf(false) }
         var showOnlyErrors by remember { mutableStateOf(false) }
         var isUserScrolling by remember { mutableStateOf(false) }
+        var searchText by remember { mutableStateOf("") }
 
         val context = LocalContext.current
         val listState = rememberLazyListState()
